@@ -129,122 +129,100 @@ def classify_link(result):
 
 
 
-def scan_javascript_files(url):
-    principal_domain = urllib.parse.urlparse(url).netloc  # Get the principal domain
-    regex_str = r"""
-
-      (?:"|')                               # Start newline delimiter
-
-      (
-        ((?:[a-zA-Z]{1,10}://|//)           # Match a scheme [a-Z]*1-10 or //
-        [^"'/]{1,}\.                        # Match a domainname (any character + dot)
-        [a-zA-Z]{2,}[^"']{0,})              # The domainextension and/or path
-
-        |
-
-        ((?:/|\.\./|\./)                    # Start with /,../,./
-        [^"'><,;| *()(%%$^/\\\[\]]          # Next character can't be...
-        [^"'><,;|()]{1,})                   # Rest of the characters can't be
-
-        |
-
-        ([a-zA-Z0-9_\-/]{1,}/               # Relative endpoint with /
-        [a-zA-Z0-9_\-/]{1,}                 # Resource name
-        \.(?:[a-zA-Z]{1,4}|action)          # Rest + extension (length 1-4 or action)
-        (?:[\?|#][^"|']{0,}|))              # ? or # mark with parameters
-
-        |
-
-        ([a-zA-Z0-9_\-/]{1,}/               # REST API (no extension) with /
-        [a-zA-Z0-9_\-/]{3,}                 # Proper REST endpoints usually have 3+ chars
-        (?:[\?|#][^"|']{0,}|))              # ? or # mark with parameters
-
-        |
-
-        ([a-zA-Z0-9_\-]{1,}                 # filename
-        \.(?:php|asp|aspx|jsp|json|
-             action|html|js|txt|xml)        # . + extension
-        (?:[\?|#][^"|']{0,}|))              # ? or # mark with parameters
-
-      )
-
-      (?:"|')                               # End newline delimiter
-
-    """
-
-    def send_request(url):
-        ssl._create_default_https_context = ssl._create_unverified_context
-        headers = {
+class LinkFinder:
+    def __init__(self):
+        self.scanned_set = set()
+        self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.8',
             'Accept-Encoding': 'gzip'
         }
-        q = urllib.request.Request(url, headers=headers)
+        ssl._create_default_https_context = ssl._create_unverified_context
+
+    def send_request(self, url):
+
+        q = urllib.request.Request(url, headers=self.headers)
         response = urllib.request.urlopen(q)
         if response.info().get('Content-Encoding') == 'gzip':
             data = gzip.decompress(response.read()).decode('utf-8')
         else:
             data = response.read().decode('utf-8')
         return data
-    send_request(url)
 
-    def parse_input(input):
-        if input.startswith(('http://', 'https://', 'file://', 'ftp://', 'ftps://')):
-            return [input]
-        return [input]
 
-    def get_context(list_matches, content):
+    def get_context(self, list_matches, content):
         items = []
         for m in list_matches:
             item = m[0]
             items.append(item)
         return items
 
-    def parse_file(content):
-        regex = re.compile(regex_str, re.VERBOSE)
+
+    def parse_file(self, content):
+        regex_str = r"""
+            (?:"|')                           # Start newline delimiter
+            (
+                (?:(?:[a-zA-Z]{1,10}://)|//)   # Match a scheme [a-zA-Z]*1-10 or //
+                [^"'/]{1,}\.[a-zA-Z]{2,}[^"']{0,}  # Match a domainname (any character + dot + domainextension and/or path)
+                |
+                (?:/|\.\./|\./)                # Start with /,../,./
+                [^"'><,;| *()(%%$^/\\\[\]]     # Next character can't be...
+                [^"'><,;|()]{1,}               # Rest of the characters can't be
+                |
+                [a-zA-Z0-9_\-/]{1,}/           # Relative endpoint with /
+                [a-zA-Z0-9_\-/]{1,}            # Resource name
+                \.(?:[a-zA-Z]{1,4}|action)     # Rest + extension (length 1-4 or action)
+                (?:[\?|#][^"|']{0,})           # ? or # mark with parameters
+                |
+                [a-zA-Z0-9_\-/]{1,}/           # REST API (no extension) with /
+                [a-zA-Z0-9_\-/]{3,}            # Proper REST endpoints usually have 3+ chars
+                (?:[\?|#][^"|']{0,})           # ? or # mark with parameters
+                |
+                [a-zA-Z0-9_\-]+                # filename
+                \.(?:php|asp|aspx|jsp|json|action|html|js|txt|xml)   # . + extension
+                (?:[\?|#][^"|']{0,})           # ? or # mark with parameters
+            )
+            (?:"|')                           # End newline delimiter
+        """
+        regex = re.compile(regex_str, re.VERBOSE | re.IGNORECASE)
         all_matches = [(m.group(1), m.start(0), m.end(0)) for m in re.finditer(regex, content)]
-        items = get_context(all_matches, content)
+        items = self.get_context(all_matches, content)
         return items
 
-    def recursive_scan(url, scanned_set, depth, principal_domain):
-        if url in scanned_set or depth < 1:
+    def recursive_scan(self, url, depth, principal_domain):
+        if url in self.scanned_set or depth < 1:
             return
-        scanned_set.add(url)
+        self.scanned_set.add(url)
 
         try:
-            file = send_request(url)
-            # Check if the file content has already been scanned
-            if file in scanned_set:
-                return
-            scanned_set.add(file)
-            endpoints = parse_file(file)
+            file = self.send_request(url)
+            self.scanned_set.add(url)  # Move outside the loop to avoid duplicate calls
+            endpoints = self.parse_file(file)
             for result in endpoints:
                 classification = classify_link(result)
                 if 'Image file' not in classification and 'CSS code' not in classification:
-                    test = {
+                    scan_results = {
                         "link": result,
                         "classification": classification
                     }
-                    print(test)
+                    print(scan_results)
 
-                    # Check if the link is relative and scan recursively
                     if result.startswith('/'):
                         next_url = urllib.parse.urljoin(url, result)
-                        recursive_scan(next_url, scanned_set, depth - 1, principal_domain)
-
-                    # Check if the link has the same principal domain and scan recursively
+                        self.recursive_scan(next_url, depth - 1, principal_domain)
                     elif result.startswith(('http://', 'https://', 'file://', 'ftp://', 'ftps://')):
                         domain = urllib.parse.urlparse(result).netloc
                         if domain == principal_domain:
-                            recursive_scan(result, scanned_set, depth - 1, principal_domain)
-
+                            self.recursive_scan(result, depth - 1, principal_domain)
         except Exception as e:
             print(f"Error scanning {url}: {e}")
             return
 
-    scanned_set = set()
-    recursive_scan(url, scanned_set, 2, principal_domain)
 
+    def scan_javascript_files(self, url):
+        principal_domain = urllib.parse.urlparse(url).netloc  # Get the principal domain
+        self.recursive_scan(url, 2, principal_domain)
 
-scan_javascript_files("https://vulnvision.com/")
+link_finder = LinkFinder()
+link_finder.scan_javascript_files('https://vulnvision.com')
