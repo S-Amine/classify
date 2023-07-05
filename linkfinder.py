@@ -12,18 +12,19 @@ def classify_link(result):
         classifications.append("WebSocket")
     if result.startswith('//'):
         classifications.append("Protocol-relative")
-    if result.startswith('/'):
+    if result.startswith(('/', '..', '.')) or re.match(r'\w+/[\w/]+', result):
         classifications.append("Relative path")
     if result.startswith(('ftp://', 'ftps://')):
         classifications.append("FTP")
     if result.endswith(('.php', '.asp', '.aspx', '.jsp', '.json', '.action', '.html', '.js', '.txt', '.xml', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.py', '.java', '.cpp', '.c', '.h', '.php', '.html', '.js', '.css', '.exe', '.dll', '.jar')):
         classifications.append("File with extension")
-    if result.endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg')):
+    if result.endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', 'webp')):
         classifications.append("Image file")
     if result.endswith(('.js', '.py', '.java', '.cpp', '.c', '.php', '.html', '.css', '.ps1', '.pl', '.rb', '.sh', '.swift', '.rust', '.go', '.lua', '.typescript', '.r', '.scala', '.perl', '.kotlin', '.matlab', '.groovy', '.haskell', '.dart', '.coffeescript', '.shell', '.powershell', '.vb', '.objective-c', '.groovy', '.fortran', '.elm', '.erlang', '.clojure')):
         classifications.append("Code file")
 
     languages = {
+        r'\.json\b': "Json file",
         r'\.js\b': "JavaScript",
         r'\.py\b': "Python",
         r'\.java\b': "Java",
@@ -111,6 +112,9 @@ def classify_link(result):
         r'\b(git|gitignore)\b': "Git files",
         r'\b(docker|dockerfile|docker-compose)\b': "Docker files",
         r'\b(\.env)\b': "Environment file",
+        r'\b(\readme|README)\b': "README file",
+        r'\b(linkedin|facebook|twitter|instagram|youtube|pinterest|tiktok|snapchat|reddit|whatsapp|wechat|telegram|tumblr|vine)\b': "Social media",
+        r'\b(password|pass)\b': "Password related",
     }
 
 
@@ -126,6 +130,7 @@ def classify_link(result):
 
 
 def scan_javascript_files(url):
+    principal_domain = urllib.parse.urlparse(url).netloc  # Get the principal domain
     regex_str = r"""
 
       (?:"|')                               # Start newline delimiter
@@ -202,24 +207,44 @@ def scan_javascript_files(url):
         items = get_context(all_matches, content)
         return items
 
-    urls = parse_input(url)
-    results = []
-    for url in urls:
+    def recursive_scan(url, scanned_set, depth, principal_domain):
+        if url in scanned_set or depth < 1:
+            return
+        scanned_set.add(url)
+
         try:
             file = send_request(url)
+            # Check if the file content has already been scanned
+            if file in scanned_set:
+                return
+            scanned_set.add(file)
             endpoints = parse_file(file)
-            results.extend(endpoints)
-        except:
-            continue
+            for result in endpoints:
+                classification = classify_link(result)
+                if 'Image file' not in classification and 'CSS code' not in classification:
+                    test = {
+                        "link": result,
+                        "classification": classification
+                    }
+                    print(test)
 
-    # return results
-    for result in results:
-        classification = classify_link(result)
-        test = {
-            "link": result,
-            "classification": classification
-        }
-        print(test)
+                    # Check if the link is relative and scan recursively
+                    if result.startswith('/'):
+                        next_url = urllib.parse.urljoin(url, result)
+                        recursive_scan(next_url, scanned_set, depth - 1, principal_domain)
+
+                    # Check if the link has the same principal domain and scan recursively
+                    elif result.startswith(('http://', 'https://', 'file://', 'ftp://', 'ftps://')):
+                        domain = urllib.parse.urlparse(result).netloc
+                        if domain == principal_domain:
+                            recursive_scan(result, scanned_set, depth - 1, principal_domain)
+
+        except Exception as e:
+            print(f"Error scanning {url}: {e}")
+            return
+
+    scanned_set = set()
+    recursive_scan(url, scanned_set, 2, principal_domain)
 
 
-scan_javascript_files("https://hackerone.com/")
+scan_javascript_files("https://vulnvision.com/")
